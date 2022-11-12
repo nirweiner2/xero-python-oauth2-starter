@@ -220,6 +220,66 @@ def get_invoices():
         "code.html", title="Invoices", code=code, sub_title=sub_title
     )
 
+@app.route("/convert")
+@xero_token_required
+def convert():
+    xero_tenant_id = get_xero_tenant_id()
+    accounting_api = AccountingApi(api_client)
+
+    invoices = accounting_api.get_invoices(
+        xero_tenant_id, statuses=["AUTHORISED"]
+    )
+
+    invoices = invoices.invoices
+
+    new_invoices = []
+    for invoice in invoices:
+        import re
+        matches = re.findall("\(\D+(\d+[,]?\d+\.\d+)\).*\(converted to USD (\d+\.\d+)\)", invoice.reference)
+        print(matches)
+        if len(matches) != 1:
+            continue
+        if len(matches[0]) != 2:
+            continue
+        if invoice.reference.endswith(" DONE"):
+            continue
+        before, after = matches[0]
+        import decimal
+        before = decimal.Decimal(before.replace(",", ""))
+        after = decimal.Decimal(after.replace(",", ""))
+        
+        if invoice.total == after:
+            continue
+
+        rate = after / before
+        print(rate)
+
+        new_line_items = []
+        for lineItem in invoice.line_items:
+            lineItem.line_amount = format(lineItem.line_amount * rate,'.3f')
+            lineItem.unit_amount = format(lineItem.unit_amount * rate,'.3f')
+            new_line_items.append(lineItem)
+        invoice.line_items = new_line_items
+        invoice.sub_total = after
+        invoice.total = after
+        invoice.reference += " DONE"
+
+        accounting_api.update_invoice(
+            xero_tenant_id,
+            invoice.invoice_id,
+            invoices = invoice
+        )
+
+        new_invoices.append(invoice)
+
+
+    code = serialize_model(new_invoices)
+    sub_title = "Total invoices found: {}".format(len(new_invoices))
+    
+    return render_template(
+        "code.html", title="Invoices", code=code, sub_title=sub_title
+    )
+
 
 @app.route("/login")
 def login():
